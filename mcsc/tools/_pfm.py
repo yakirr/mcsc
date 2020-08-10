@@ -1,13 +1,13 @@
 import numpy as np
 import pandas as pd
 import scipy.stats as st
-from ._stats import conditional_permutation, empirical_fdrs, \
-    empirical_fwers, minfwer_loo, numtests, numtests_loo
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import scipy.stats as st
 import time, gc
 from argparse import Namespace
+
+####***** about to modify mixedmodel to take names of variables as input rather than values of those variables
 
 # creates a neighborhood frequency matrix
 #   requires data.uns[sampleXmeta][ncellsid] to contain the number of cells in each sample.
@@ -60,6 +60,13 @@ def pca(data, repname='sampleXnh', npcs=None):
 
 def mixedmodel(data, Y, B, T, npcs=50, repname='sampleXnh', usepca=True,
         pval='lrt', badbatch_r2=0.05, outputlevel=1):
+    #compute nfm if not found
+    if repname not in data.uns and repname='sampleXnh':
+        nfm(data)
+    elif repname not in data.uns:
+        raise ValueError(repname + ' not found')
+
+    # compute PCA if needed and not found
     if npcs is None:
         npcs = data.uns[repname].shape[1] - 1
     if usepca and repname+'_sampleXpc' not in data.uns.keys() \
@@ -109,6 +116,7 @@ def mixedmodel(data, Y, B, T, npcs=50, repname='sampleXnh', usepca=True,
     mdf0 = md0.fit(reml=False)
     if outputlevel > 0: print(mdf0.summary())
 
+    # build the result object
     res = {}
     if pval == 'lrt':
         md1 = smf.mixedlm(
