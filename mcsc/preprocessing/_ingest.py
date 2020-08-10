@@ -1,8 +1,9 @@
 import scanpy as sc
 from ._multisample import issorted, sortedcopy, sample_size
 
+# assumes that data is an AnnData object (i.e., data.X contains single-cell info)
 # assumes that data.obs contains a field for sample id and a field for batch id
-def init(data, sampleid='id', batchid='batch', inplace=True):
+def init(data, sampleid='id', batchid='batch', inplace=True, makeumap=False):
     print('creating and populating sampleXmeta')
     data.uns['sampleXmeta'] = \
         data.obs[[sampleid, batchid]].drop_duplicates().set_index(sampleid)
@@ -23,7 +24,8 @@ def init(data, sampleid='id', batchid='batch', inplace=True):
     print('computing nn graph')
     sc.pp.neighbors(data)
 
-    print('computing umap for visualization')
-    #sc.tl.umap(data)
+    if makeumap:
+        print('computing umap for visualization')
+        sc.tl.umap(data)
 
     return data
