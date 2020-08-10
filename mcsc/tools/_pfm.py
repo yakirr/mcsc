@@ -7,7 +7,7 @@ import scipy.stats as st
 import time, gc
 from argparse import Namespace
 
-####***** about to modify mixedmodel to take names of variables as input rather than values of those variables
+#TODO rename sampleXmeta to samplem or samples, consider making it an attribute of data
 
 # creates a neighborhood frequency matrix
 #   requires data.uns[sampleXmeta][ncellsid] to contain the number of cells in each sample.
@@ -58,34 +58,40 @@ def pca(data, repname='sampleXnh', npcs=None):
     data.uns[repname+'_featureXpc'] = U[:,:npcs]
     data.uns[repname+'_sampleXpc'] = V[:,:npcs]
 
-def mixedmodel(data, Y, B, T, npcs=50, repname='sampleXnh', usepca=True,
+def mixedmodel(data, phenoname, covnames=[],
+        batchname='batch', npcs=50, repname='sampleXnh', usepca=True,
         pval='lrt', badbatch_r2=0.05, outputlevel=1):
+    #extract relevant covariates from data
+    Y = data.uns['sampleXmeta'][phenoname]
+    T = data.uns['sampleXmeta'][covnames]
+    if batchname is not None:
+        B = data.uns['sampleXmeta'][batchname]
+    else:
+        B = pd.DataFrame(np.ones(len(Y)), columns=['batch'])
+
     #compute nfm if not found
-    if repname not in data.uns and repname='sampleXnh':
+    if repname not in data.uns and repname=='sampleXnh':
+        print('computing neighborhood frequency matrix')
         nfm(data)
     elif repname not in data.uns:
         raise ValueError(repname + ' not found')
 
     # compute PCA if needed and not found
-    if npcs is None:
-        npcs = data.uns[repname].shape[1] - 1
+    if npcs is None or npcs > min(*data.uns[repname].shape):
+        npcs = min(*data.uns[repname].shape) - 1
     if usepca and repname+'_sampleXpc' not in data.uns.keys() \
         or usepca and len(data.uns[repname+'_sqevals']) < npcs:
+        print('computing PCA')
         pca(data, repname=repname, npcs=npcs)
 
     # define X
     if usepca:
-        #sqevs = data.uns[repname+'_sqevals'][:npcs]
-        X = data.uns[repname+'_sampleXpc'][:,:npcs]
-        testnames = ['PC'+str(i) for i in range(len(X.T))]
+        X = pd.DataFrame(data.uns[repname+'_sampleXpc'][:,:npcs],
+                index=data.uns['sampleXmeta'].index,
+                columns=['PC'+str(i) for i in range(npcs)])
     else:
-        X = data.uns[repname]
-        testnames = ['X'+str(i) for i in range(len(X.T))]
-
-    # define fixed effect covariates
-    if T is None:
-        T = np.zeros((len(X), 0))
-    covnames = ['T'+str(i) for i in range(len(T.T))]
+        X = pd.DataFrame(data.uns[repname],
+                columns=['X'+str(i) for i in range(len(X.T))])
 
     # add any problematic batches as fixed effects
     corrs = np.array([
@@ -93,7 +99,7 @@ def mixedmodel(data, Y, B, T, npcs=50, repname='sampleXnh', usepca=True,
         for b in np.unique(B)
     ])
     badbatches = np.unique(B)[(corrs**2).max(axis=1) > badbatch_r2]
-    batchnames = ['B'+str(b) for b in badbatches]
+    badbatchnames = ['B'+str(b) for b in badbatches]
     if len(badbatches) > 0:
         batch_fe = np.array([
             (B == b).astype(np.float)
@@ -102,34 +108,36 @@ def mixedmodel(data, Y, B, T, npcs=50, repname='sampleXnh', usepca=True,
         B[np.isin(B, badbatches)] = -1
     else:
         batch_fe = np.zeros((len(X), 0))
+    batch_fe = pd.DataFrame(batch_fe, columns=badbatchnames,
+                                    index=data.uns['sampleXmeta'].index)
+    #TODO: account for the case where all batche are bad batches, in which case
+    #   we have a singular matrix
 
     # construct the dataframe for the analysis
-    df = pd.DataFrame(
-        np.hstack([X, T, batch_fe, B.reshape((-1,1)), Y.reshape((-1,1))]),
-        columns=testnames+covnames+batchnames+['batch', 'Y'])
+    df = pd.concat([X, T, batch_fe, B, Y], axis=1)
 
-    # build the alternative model
-    fixedeffects = covnames + batchnames
+    # build the null model
+    fixedeffects = list(covnames) + list(batch_fe.columns)
     md0 = smf.mixedlm(
-        'Y ~ ' + ('1' if fixedeffects == [] else '+'.join(fixedeffects)),
-        df, groups='batch')
+        phenoname + ' ~ ' + ('1' if fixedeffects == [] else '+'.join(fixedeffects)),
+        df, groups=batchname)
     mdf0 = md0.fit(reml=False)
     if outputlevel > 0: print(mdf0.summary())
 
-    # build the result object
+    # build necessary alternative models and compute p-values
     res = {}
     if pval == 'lrt':
         md1 = smf.mixedlm(
-            'Y ~ ' + '+'.join(fixedeffects+testnames),
+            phenoname + ' ~ ' + '+'.join(fixedeffects+list(X.columns)),
             df, groups='batch')
         mdf1 = md1.fit(reml=False)
         if outputlevel > 0: print(mdf1.summary())
         llr = mdf1.llf - mdf0.llf
-        res['p'] = st.chi2.sf(2*llr, len(testnames))
-        res['gamma'] = mdf1.params[testnames] # coefficients in linear regression
-        res['gamma_p'] = mdf1.pvalues[testnames] # p-values for individual coefficients
-        res['gamma_scale'] = np.sqrt(data.uns[repname + '_sqevals'][:npcs])
+        res['p'] = st.chi2.sf(2*llr, len(X.columns))
+        res['gamma'] = mdf1.params[X.columns] # coefficients in linear regression
+        res['gamma_p'] = mdf1.pvalues[X.columns] # p-values for individual coefficients
         if usepca:
+            res['gamma_scale'] = np.sqrt(data.uns[repname + '_sqevals'][:npcs])
             V = data.uns[repname + '_featureXpc'][:,:npcs]
             res['beta'] = V.dot(res['gamma'] / res['gamma_scale'])
         return Namespace(**res)
