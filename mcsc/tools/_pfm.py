@@ -59,7 +59,7 @@ def pca(data, repname='sampleXnh', npcs=None):
     data.uns[repname+'_sampleXpc'] = V[:,:npcs]
 
 def mixedmodel(data, phenoname, covnames=[],
-        batchname='batch', npcs=50, repname='sampleXnh', usepca=True,
+        batchname='batch', npcs=20, repname='sampleXnh', usepca=True,
         pval='lrt', badbatch_r2=0.05, outputlevel=1):
     #extract relevant covariates from data
     Y = data.uns['sampleXmeta'][phenoname]
